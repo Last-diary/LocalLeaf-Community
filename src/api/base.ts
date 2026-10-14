@@ -417,6 +417,8 @@ export interface FileEntity {
     _id: string;
     _type: 'doc' | 'file' | 'folder';
     name: string;
+    /** Optional Git blob SHA-1 provided for binary files by Overleaf. */
+    hash?: string;
 }
 
 export interface FolderEntity extends FileEntity {

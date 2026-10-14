@@ -2,6 +2,16 @@
 
 All notable changes to LocalLeaf Community will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Skip re-downloading binary attachments whose Git blob SHA-1 in a fresh project-tree snapshot matches the local bytes; documents, missing or malformed hashes, locally changed files, dirty editors, pending synchronization intents, and retained (non-fresh) trees keep the existing download and reconciliation path
+
+### Validation
+
+- Add 16 regression cases covering matching and uppercase hashes, replacement IDs, missing or malformed hashes, missing or changed local content, stale-tree fallback, pending replacements, dirty editors, editable documents, and empty files
+
 ## [0.2.16] - 2026-09-22
 
 ### Fixed

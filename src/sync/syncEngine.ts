@@ -142,6 +142,7 @@ interface FileTreeEntry {
     name: string;
     path: string;
     parentId?: string;
+    remoteHash?: string;
 }
 
 interface DocumentSnapshot {
@@ -158,6 +159,7 @@ export class SyncEngine {
     private project?: ProjectEntity;
     private fileTree: Map<string, FileTreeEntry> = new Map();
     private fileTreeByPath: Map<string, FileTreeEntry> = new Map();
+    private fullTreeSnapshotGeneration = 0;
     private readonly removedSnapshotEntries = new Map<string, FileTreeEntry>();
     private fileCache: Map<string, string> = new Map();
     private baseContent: Map<string, Uint8Array> = new Map();
@@ -587,6 +589,8 @@ export class SyncEngine {
                     name: file.name,
                     path: filePath,
                     parentId: folderId,
+                    remoteHash: typeof file.hash === 'string' && /^[a-f0-9]{40}$/i.test(file.hash)
+                        ? file.hash.toLowerCase() : undefined,
                 };
                 addEntry(entry);
                 debugLog('buildFileTree: Added file', filePath);
@@ -643,6 +647,7 @@ export class SyncEngine {
         this.fileTreeByPath.clear();
         for (const [id, entry] of nextFileTree) this.fileTree.set(id, entry);
         for (const [path, entry] of nextFileTreeByPath) this.fileTreeByPath.set(path, entry);
+        if (targetPath === '/') this.fullTreeSnapshotGeneration++;
 
         debugLog('buildFileTree: Total entries:', this.fileTree.size);
     }
@@ -4055,7 +4060,12 @@ export class SyncEngine {
         try {
             // Preserve ancestors across fresh snapshots to detect remote
             // deletions. A reconnect already supplied this same metadata.
+            const previousSnapshot = this.fullTreeSnapshotGeneration;
             if (refreshTree) await this.refreshProjectFileTree();
+            // Without a fresh snapshot, a retained live tree may contain stale
+            // binary hashes. Reconnect pulls already received a new snapshot.
+            const freshBinaryHashes = !refreshTree
+                || this.fullTreeSnapshotGeneration > previousSnapshot;
             await this.recoverReplacementIntents();
             await this.reconcileRecordedStructure();
             const downloadFile = async (entry: FileTreeEntry) => {
@@ -4085,6 +4095,29 @@ export class SyncEngine {
                     // Track folders in baseContent with empty content
                     this.setBaseContent(entry.path, SYNCHRONIZED_CONTENT_MARKER);
                     return;
+                }
+
+                // Binary files have Git blob SHA-1 hashes; editable documents
+                // keep their OT/version reconciliation. Missing/invalid hashes,
+                // local changes, dirty editors and pending writes all fall back
+                // to the existing full-content comparison.
+                if (freshBinaryHashes && entry.type === 'file' && entry.remoteHash
+                    && !this.stateStore?.entries.get(entry.path)?.intent) {
+                    const uri = this.settings.getFilePath(entry.path);
+                    await this.assertNoSymbolicLinks(uri);
+                    if (!this.getOpenTextDocument(uri)?.isDirty) {
+                        const local = await this.readLocalFileIfExists(uri);
+                        if (local !== undefined) {
+                            const remoteFormatHash = createHash('sha1')
+                                .update(`blob ${local.byteLength}\0`).update(local).digest('hex');
+                            if (remoteFormatHash === entry.remoteHash && !this.getOpenTextDocument(uri)?.isDirty) {
+                                this.recordSynchronizedContent(entry, local);
+                                skippedCount++;
+                                this.log(`Skipped unchanged binary download (remote hash): ${entry.path}`);
+                                return;
+                            }
+                        }
+                    }
                 }
 
                 const remoteContent = await this.getRemoteEntryContent(entry);
